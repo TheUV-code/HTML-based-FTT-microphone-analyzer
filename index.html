@@ -1,0 +1,1304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Acoustic FFT Analyzer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: Inter, system-ui, -apple-system, 'Segoe UI', sans-serif; background-color: #0f172a; color: #f8fafc; margin: 0; overflow: hidden; }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #1e293b; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+    </style>
+</head>
+<body class="flex flex-col h-screen">
+
+    <!-- Header & main controls -->
+    <header class="bg-slate-900 border-b border-slate-800 p-4 shrink-0 flex flex-wrap gap-4 items-center justify-between z-10 shadow-md">
+        <div class="flex items-center gap-3 w-full md:w-auto">
+            <div class="bg-blue-600 p-2 rounded-lg">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-white"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" x2="12" y1="19" y2="22"></line></svg>
+            </div>
+            <div>
+                <h1 class="text-xl font-bold leading-tight">Acoustic Analyzer</h1>
+                <p class="text-xs font-semibold text-slate-400" id="statusText">Awaiting microphone access…</p>
+            </div>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-3">
+            <div class="flex items-center gap-2 bg-slate-800 px-3 py-1.5 rounded-md border border-slate-700">
+                <label for="fftSize" class="text-sm font-medium text-slate-300 hidden sm:block">Size:</label>
+                <select id="fftSize" class="bg-slate-900 text-sm text-white border-none outline-none cursor-pointer">
+                    <option value="1024">1024</option>
+                    <option value="2048" selected>2048</option>
+                    <option value="4096">4096</option>
+                    <option value="8192">8192</option>
+                    <option value="16384">16384</option>
+                    <option value="32768">32768</option>
+                </select>
+                <div class="w-px h-4 bg-slate-600 mx-1"></div>
+                <label for="windowType" class="text-sm font-medium text-slate-300 hidden sm:block">Window:</label>
+                <select id="windowType" class="bg-slate-900 text-sm text-white border-none outline-none cursor-pointer">
+                    <option value="hann" selected>Hann</option>
+                    <option value="hamming">Hamming</option>
+                    <option value="blackman">Blackman</option>
+                    <option value="flattop">Flat-top</option>
+                    <option value="rectangular">Rectangular</option>
+                </select>
+                <div class="w-px h-4 bg-slate-600 mx-1"></div>
+                <label for="sampleRateSelect" class="text-sm font-medium text-slate-300 hidden sm:block">Fs:</label>
+                <select id="sampleRateSelect" class="bg-slate-900 text-sm text-white border-none outline-none cursor-pointer">
+                    <option value="44100">44.1k</option>
+                    <option value="48000">48k</option>
+                    <option value="88200">88.2k</option>
+                    <option value="96000" selected>96k</option>
+                    <option value="192000">192k</option>
+                </select>
+            </div>
+
+            <button id="btnConnect" class="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-wait text-white px-4 py-2 rounded-md font-medium transition-colors shadow-sm">Connect Mic</button>
+            <button id="btnDisconnect" class="hidden bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-md font-medium transition-colors shadow-sm">Disconnect</button>
+
+            <button id="btnRecordToggle" title="Start/stop power averaging (R)" class="hidden w-36 justify-center items-center gap-2 text-white px-4 py-2 rounded-md font-medium transition-colors shadow-sm">
+                <div id="recordIcon" class="w-2.5 h-2.5 bg-white"></div>
+                <span id="recordLabel">Record Avg</span>
+            </button>
+            <button id="btnHold" title="Freeze the live view (H)" class="hidden w-32 justify-center items-center gap-2 text-white px-4 py-2 rounded-md font-medium transition-colors shadow-sm disabled:opacity-40 disabled:cursor-not-allowed">
+                <div id="holdIcon" class="w-2.5 h-2.5 bg-white"></div>
+                <span id="holdLabel">Hold</span>
+            </button>
+            <button id="btnReset" class="hidden bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-md font-medium transition-colors shadow-sm">Reset Avg</button>
+            <button id="btnDownload" title="Export the displayed trace as CSV" class="hidden bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-md font-medium transition-colors shadow-sm">Export CSV</button>
+        </div>
+    </header>
+
+    <!-- Settings & memory bar -->
+    <div class="bg-slate-800 border-b border-slate-700 px-4 py-2 flex flex-wrap gap-x-5 gap-y-3 text-sm items-center z-10 shadow-sm">
+        <div class="flex items-center gap-2">
+            <label class="text-slate-400 font-medium" for="minFreq">Freq (Hz):</label>
+            <input type="number" id="minFreq" value="20" min="1" class="w-16 bg-slate-900 text-white border border-slate-700 rounded px-2 py-1 outline-none focus:border-blue-500 text-right">
+            <span class="text-slate-500">–</span>
+            <input type="number" id="maxFreq" value="48000" min="1" class="w-20 bg-slate-900 text-white border border-slate-700 rounded px-2 py-1 outline-none focus:border-blue-500 text-right">
+        </div>
+        <div class="flex items-center gap-2">
+            <label class="text-slate-400 font-medium" for="minDb">dB Scale:</label>
+            <input type="number" id="minDb" value="-140" class="w-16 bg-slate-900 text-white border border-slate-700 rounded px-2 py-1 outline-none focus:border-blue-500 text-right">
+            <span class="text-slate-500">–</span>
+            <input type="number" id="maxDb" value="0" class="w-16 bg-slate-900 text-white border border-slate-700 rounded px-2 py-1 outline-none focus:border-blue-500 text-right">
+        </div>
+        <div class="flex items-center gap-2 pl-2 border-l border-slate-700">
+            <label class="text-slate-400 font-medium" for="dbOffset" title="Added to every displayed dB value (e.g. dBFS → dB SPL)">dB Offset:</label>
+            <input type="number" id="dbOffset" value="0" step="0.1" class="w-16 bg-slate-900 text-white border border-slate-700 rounded px-2 py-1 outline-none focus:border-blue-500 text-right">
+        </div>
+
+        <div class="flex items-center gap-2 pl-2 border-l border-slate-700">
+            <input type="file" id="calFileInput" class="hidden" accept=".txt,.csv,.cal,.frd">
+            <button id="btnLoadCal" class="bg-slate-700 hover:bg-slate-600 text-xs px-2 py-1.5 rounded transition shadow-sm font-medium">Load Cal</button>
+            <span class="text-xs text-slate-400 max-w-[110px] truncate" id="calFileLabel" title="No calibration loaded">None</span>
+            <select id="calMode" title="How the calibration file is applied" class="bg-slate-900 text-white text-xs border border-slate-700 rounded px-1 py-1 outline-none cursor-pointer">
+                <option value="subtract" selected>Mic response (subtract)</option>
+                <option value="add">Correction (add)</option>
+            </select>
+            <button id="btnClearCal" class="hidden text-red-400 hover:text-red-300 font-bold px-1" title="Remove calibration">✕</button>
+        </div>
+
+        <div class="flex items-center gap-2 pl-2 border-l border-slate-700">
+            <button id="btnSave" title="Save the displayed trace (S)" class="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-md text-xs font-medium transition-colors">Save FFT</button>
+            <select id="savedFftsSelect" class="bg-slate-900 text-white text-xs border border-slate-700 rounded px-2 py-1.5 outline-none cursor-pointer max-w-[220px]">
+                <option value="-1">-- Live View --</option>
+            </select>
+            <button id="btnDeleteSaved" title="Delete the selected saved trace" class="text-red-400 hover:text-red-300 disabled:opacity-30 disabled:cursor-not-allowed font-bold px-1">✕</button>
+            <label class="flex items-center gap-1 text-xs text-slate-300 cursor-pointer" title="Draw all saved traces on top of the current view">
+                <input type="checkbox" id="overlayToggle" class="accent-indigo-500"> Overlay
+            </label>
+            <input type="file" id="traceFileInput" class="hidden" accept=".csv,.txt,.frd">
+            <button id="btnImportTrace" title="Load a previously exported CSV as a saved trace" class="bg-slate-700 hover:bg-slate-600 text-xs px-2 py-1.5 rounded transition shadow-sm font-medium">Import</button>
+        </div>
+
+        <div class="ml-auto flex items-center gap-4">
+            <div class="flex items-center gap-2">
+                <label for="overlapSize" class="text-slate-400 font-medium text-xs">Overlap:</label>
+                <select id="overlapSize" class="bg-slate-900 text-white text-xs border border-slate-700 rounded px-1 py-1 outline-none cursor-pointer">
+                    <option value="0">0%</option>
+                    <option value="50">50%</option>
+                    <option value="75" selected>75%</option>
+                    <option value="87.5">87.5%</option>
+                </select>
+            </div>
+            <div class="flex items-center gap-2" title="Live view release time constant. 0 = no smoothing.">
+                <label for="releaseTime" class="text-slate-400 font-medium text-xs">Release:</label>
+                <input type="range" id="releaseTime" min="0" max="1000" step="10" value="50" class="w-28 cursor-pointer accent-blue-500">
+                <span id="releaseLabel" class="text-xs font-mono text-slate-300 w-14 text-right">50 ms</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Parameter metrics -->
+    <div class="bg-slate-950 border-b border-slate-800 px-4 py-1.5 flex flex-wrap gap-x-6 gap-y-1 text-xs font-mono text-slate-400 z-10 shadow-inner justify-center md:justify-start">
+        <div><span class="text-slate-500">Fs:</span> <span id="paramFs" class="text-emerald-400 font-semibold">-- Hz</span></div>
+        <div><span class="text-slate-500">Window Length:</span> <span id="paramLen" class="text-amber-400 font-semibold">-- ms</span></div>
+        <div><span class="text-slate-500">Freq Resolution:</span> <span id="paramRes" class="text-blue-400 font-semibold">-- Hz</span></div>
+        <div><span class="text-slate-500">Hop:</span> <span id="paramHop" class="text-slate-300 font-semibold">-- ms</span></div>
+        <div id="paramDroppedWrap" class="hidden"><span class="text-slate-500">Dropped:</span> <span id="paramDropped" class="text-red-400 font-semibold">0</span></div>
+    </div>
+
+    <!-- Main workspace -->
+    <main class="flex-1 flex p-4 gap-4 min-h-0 bg-slate-950">
+        <!-- VU meter -->
+        <div class="w-16 flex flex-col items-center bg-slate-900 rounded-lg border border-slate-800 p-2 relative shadow-inner shrink-0">
+            <span class="text-[10px] font-semibold text-slate-400 mb-2 uppercase tracking-wider" id="vuLabel">dBFS</span>
+            <div class="flex-1 w-full relative bg-slate-800 rounded-md overflow-hidden border border-slate-950">
+                <canvas id="vuCanvas"></canvas>
+            </div>
+            <div id="vuValue" class="text-xs font-mono text-slate-300 mt-2 text-center w-full bg-slate-950 py-1 rounded">-∞</div>
+        </div>
+
+        <div class="flex-1 flex flex-col gap-4 min-w-0">
+            <!-- Oscilloscope -->
+            <div class="h-24 bg-slate-900 rounded-lg border border-slate-800 shadow-inner relative flex-shrink-0">
+                <div class="absolute top-2 left-3 z-10 text-xs font-mono text-slate-400 bg-slate-950/80 px-2 py-1 rounded border border-slate-800 backdrop-blur-sm">Time Domain</div>
+                <div class="w-full h-full relative">
+                    <canvas id="oscCanvas"></canvas>
+                </div>
+            </div>
+
+            <!-- Spectrum -->
+            <div class="flex-1 flex flex-col bg-slate-900 rounded-lg border border-slate-800 shadow-inner relative min-h-0">
+                <div class="absolute top-4 right-4 z-10 flex gap-4 text-xs font-mono pointer-events-none">
+                    <div class="bg-slate-950/80 px-2 py-1 rounded border border-slate-800 backdrop-blur-sm">
+                        Frames Avg: <span id="frameCount" class="text-blue-400">0</span>
+                    </div>
+                    <div class="bg-slate-950/80 px-2 py-1 rounded border border-slate-800 backdrop-blur-sm">
+                        Peak: <span id="peakFreq" class="text-emerald-400">--</span>
+                    </div>
+                </div>
+                <div class="flex-1 relative m-4">
+                    <canvas id="fftCanvas"></canvas>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+    'use strict';
+
+    // =====================================================================
+    // Constants
+    // =====================================================================
+    const FLOOR_DB = -200;              // "no signal" sentinel for spectra
+    const VU_RANGE_DB = 120;            // VU meter shows 0 … -120 dBFS
+    const VU_PEAK_FALL_DB_PER_S = 20;   // peak-hold marker fall rate
+    const MAX_FFT_SIZE = 32768;
+    const MAX_FRAMES_PER_BLOCK = 64;    // safety cap per audio callback
+    const Y_AXIS_W = 40;                // px reserved for dB labels
+    const X_AXIS_H = 18;                // px reserved for frequency labels
+    const CAPTURE_CHUNK = 1024;         // samples per AudioWorklet message
+
+    const COLOR_LIVE = '16, 185, 129';
+    const COLOR_AVG = '59, 130, 246';
+    const OVERLAY_COLORS = [
+        '244, 114, 182', '250, 204, 21', '34, 211, 238', '167, 139, 250',
+        '251, 146, 60', '163, 230, 53', '248, 113, 113', '226, 232, 240'
+    ];
+
+    // Runs on the audio thread: forwards mic samples to the main thread in chunks.
+    const WORKLET_SOURCE = `
+        class FftCaptureProcessor extends AudioWorkletProcessor {
+            constructor() { super(); this.buf = new Float32Array(${CAPTURE_CHUNK}); this.n = 0; }
+            process(inputs) {
+                const ch = inputs[0] && inputs[0][0];
+                if (ch) {
+                    for (let i = 0; i < ch.length; i++) {
+                        this.buf[this.n++] = ch[i];
+                        if (this.n === this.buf.length) {
+                            this.port.postMessage(this.buf, [this.buf.buffer]);
+                            this.buf = new Float32Array(${CAPTURE_CHUNK});
+                            this.n = 0;
+                        }
+                    }
+                }
+                return true;
+            }
+        }
+        registerProcessor('fft-capture', FftCaptureProcessor);
+    `;
+
+    // =====================================================================
+    // DOM
+    // =====================================================================
+    const $ = (id) => document.getElementById(id);
+    const ui = {
+        status: $('statusText'),
+        btnConnect: $('btnConnect'), btnDisconnect: $('btnDisconnect'),
+        btnRecord: $('btnRecordToggle'), recordLabel: $('recordLabel'), recordIcon: $('recordIcon'),
+        btnHold: $('btnHold'), holdLabel: $('holdLabel'), holdIcon: $('holdIcon'),
+        btnReset: $('btnReset'), btnDownload: $('btnDownload'),
+        fftSize: $('fftSize'), windowType: $('windowType'), sampleRate: $('sampleRateSelect'),
+        minFreq: $('minFreq'), maxFreq: $('maxFreq'), minDb: $('minDb'), maxDb: $('maxDb'),
+        dbOffset: $('dbOffset'), overlap: $('overlapSize'),
+        release: $('releaseTime'), releaseLabel: $('releaseLabel'),
+        calFile: $('calFileInput'), btnLoadCal: $('btnLoadCal'), calLabel: $('calFileLabel'),
+        calMode: $('calMode'), btnClearCal: $('btnClearCal'),
+        btnSave: $('btnSave'), savedSelect: $('savedFftsSelect'), btnDeleteSaved: $('btnDeleteSaved'),
+        overlay: $('overlayToggle'), traceFile: $('traceFileInput'), btnImport: $('btnImportTrace'),
+        paramFs: $('paramFs'), paramLen: $('paramLen'), paramRes: $('paramRes'), paramHop: $('paramHop'),
+        paramDropped: $('paramDropped'), paramDroppedWrap: $('paramDroppedWrap'),
+        vuLabel: $('vuLabel'), vuValue: $('vuValue'),
+        frameCount: $('frameCount'), peakFreq: $('peakFreq'),
+    };
+
+    const makeCanvas = (id) => { const el = $(id); return { el, ctx: el.getContext('2d'), w: 0, h: 0 }; };
+    const canvases = { vu: makeCanvas('vuCanvas'), osc: makeCanvas('oscCanvas'), fft: makeCanvas('fftCanvas') };
+
+    // =====================================================================
+    // State
+    // =====================================================================
+    // Audio graph
+    let audioCtx = null, streamRef = null, sourceNode = null, captureNode = null, sinkNode = null;
+    let connecting = false, everConnected = false;
+    let sampleRate = parseInt(ui.sampleRate.value, 10);
+    let animationId = null, lastFrameTs = 0;
+
+    // Ring buffer of incoming samples
+    let ringBuf = null, ringSize = 0, ringWrite = 0, ringRead = 0, ringFill = 0;
+    let droppedSamples = 0;
+
+    // FFT engine
+    let fftSize = 0, bins = 0;
+    let fftRe = null, fftIm = null, fftRev = null, twCos = null, twSin = null;
+    let windowArr = null, windowSum = 1;
+    let frameBuf = null;                 // last analysed time-domain frame
+
+    // Spectra (all length = bins)
+    let binFreqs = null;
+    let rawPower = null, rawDb = null;   // current frame
+    let smoothedDb = null, heldDb = null;
+    let sumPower = null, averagedDb = null;
+    let calGain = null;                  // linear power gain per bin
+    let calPoints = [];
+
+    // Modes
+    let isRecording = false, hasRecordedData = false, isDisplayHeld = false;
+    let frameCount = 0;
+    let vuPeakDb = -VU_RANGE_DB;
+    let statusNote = '', errorMessage = '';
+
+    // Saved traces: { name, freqs, db, color, fixed }   fixed = dB offset already baked in (imported)
+    let savedTraces = [];
+    let viewingSavedIndex = -1;
+    let saveCounter = 0;
+
+    // Cursor
+    let cursorActive = false, cursorFreq = 0;
+
+    // =====================================================================
+    // Small helpers
+    // =====================================================================
+    const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+    const getOffset = () => parseFloat(ui.dbOffset.value) || 0;
+    const fmtRate = (fs) => (fs % 1000 === 0 ? fs / 1000 : (fs / 1000).toFixed(1)) + 'k';
+    const fmtFreq = (f) => f >= 1000 ? `${+(f / 1000).toFixed(2)}k` : `${+f.toFixed(1)}`;
+
+    function getHopSize() {
+        const overlap = parseFloat(ui.overlap.value) / 100;
+        return Math.max(1, Math.floor(fftSize * (1 - overlap)));
+    }
+
+    // Index of the element in an ascending array closest to f.
+    function nearestIndex(arr, f) {
+        let lo = 0, hi = arr.length - 1;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (arr[mid] < f) lo = mid + 1; else hi = mid;
+        }
+        if (lo > 0 && Math.abs(arr[lo - 1] - f) < Math.abs(arr[lo] - f)) lo--;
+        return lo;
+    }
+
+    // Parse "freq <sep> value" lines (cal files, exported CSVs). Skips headers/comments.
+    function parseNumericPairs(text) {
+        const pts = [];
+        for (let line of text.split(/\r?\n/)) {
+            line = line.trim();
+            if (!line || line.startsWith('#') || line.startsWith('*')) continue;
+            const parts = line.split(/[\s,;]+/);
+            if (parts.length < 2) continue;
+            const f = parseFloat(parts[0]), d = parseFloat(parts[1]);
+            if (isFinite(f) && isFinite(d) && f >= 0) pts.push({ f, d });
+        }
+        pts.sort((a, b) => a.f - b.f);
+        return pts.filter((p, i) => i === 0 || p.f !== pts[i - 1].f);   // drop duplicate frequencies
+    }
+
+    // =====================================================================
+    // Canvas sizing (HiDPI aware)
+    // =====================================================================
+    function resizeCanvases() {
+        const dpr = window.devicePixelRatio || 1;
+        for (const c of Object.values(canvases)) {
+            const r = c.el.parentElement.getBoundingClientRect();
+            c.w = r.width; c.h = r.height;
+            c.el.width = Math.max(1, Math.round(r.width * dpr));
+            c.el.height = Math.max(1, Math.round(r.height * dpr));
+            c.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+        forceRedraw();
+    }
+    if (window.ResizeObserver) {
+        const ro = new ResizeObserver(resizeCanvases);
+        Object.values(canvases).forEach(c => ro.observe(c.el.parentElement));
+    } else {
+        window.addEventListener('resize', resizeCanvases);
+    }
+    resizeCanvases();
+
+    // =====================================================================
+    // Audio lifecycle
+    // =====================================================================
+    async function initAudio() {
+        if (audioCtx || connecting) return;
+        errorMessage = ''; statusNote = '';
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            errorMessage = window.isSecureContext
+                ? 'This browser does not support microphone capture.'
+                : 'Microphone needs HTTPS or localhost.';
+            updateUI();
+            return;
+        }
+
+        connecting = true; updateUI();
+        const targetFs = parseInt(ui.sampleRate.value, 10);
+        try {
+            streamRef = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    echoCancellation: false, noiseSuppression: false, autoGainControl: false,
+                    channelCount: { ideal: 1 },
+                    sampleRate: { ideal: targetFs },
+                }
+            });
+
+            const AC = window.AudioContext || window.webkitAudioContext;
+            try {
+                audioCtx = new AC({ sampleRate: targetFs });
+                sourceNode = audioCtx.createMediaStreamSource(streamRef);
+            } catch (e) {
+                // Some browsers (e.g. Firefox) refuse a context rate that differs from the device rate.
+                if (audioCtx) audioCtx.close().catch(() => {});
+                audioCtx = new AC();
+                sourceNode = audioCtx.createMediaStreamSource(streamRef);
+            }
+            if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+            const prevNyquist = sampleRate / 2;
+            sampleRate = audioCtx.sampleRate;
+            if (sampleRate !== targetFs) statusNote = `${fmtRate(targetFs)} unavailable, using ${fmtRate(sampleRate)}`;
+            syncMaxFreq(prevNyquist);
+
+            ringSize = Math.max(2 * sampleRate, 4 * MAX_FFT_SIZE);
+            ringBuf = new Float32Array(ringSize);
+            ringWrite = ringRead = ringFill = 0;
+            droppedSamples = 0;
+
+            setupAnalysis();
+            await startCapture();
+
+            const track = streamRef.getAudioTracks()[0];
+            if (track) track.addEventListener('ended', () => {
+                disconnectAudio();
+                errorMessage = 'Microphone was disconnected.';
+                updateUI();
+            });
+
+            everConnected = true;
+            vuPeakDb = -VU_RANGE_DB; lastFrameTs = 0;
+            animationId = requestAnimationFrame(drawLoop);
+        } catch (err) {
+            teardownAudio();
+            errorMessage = describeMicError(err);
+            console.error(err);
+        } finally {
+            connecting = false;
+            updateUI();
+        }
+    }
+
+    function describeMicError(err) {
+        switch (err && err.name) {
+            case 'NotAllowedError': case 'SecurityError':
+                return 'Microphone permission denied.';
+            case 'NotFoundError': case 'OverconstrainedError':
+                return 'No usable microphone found.';
+            case 'NotReadableError':
+                return 'Microphone is busy or unavailable.';
+            default:
+                return 'Audio error: ' + (err && err.message ? err.message : err);
+        }
+    }
+
+    async function startCapture() {
+        sinkNode = audioCtx.createGain();
+        sinkNode.gain.value = 0;     // keeps the graph pulled without making sound
+        sinkNode.connect(audioCtx.destination);
+
+        if (audioCtx.audioWorklet && window.AudioWorkletNode) {
+            try {
+                const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: 'application/javascript' }));
+                try { await audioCtx.audioWorklet.addModule(url); } finally { URL.revokeObjectURL(url); }
+                captureNode = new AudioWorkletNode(audioCtx, 'fft-capture', { numberOfOutputs: 1, outputChannelCount: [1] });
+                captureNode.port.onmessage = (e) => pushSamples(e.data);
+                sourceNode.connect(captureNode);
+                captureNode.connect(sinkNode);
+                return;
+            } catch (e) {
+                console.warn('AudioWorklet unavailable, falling back to ScriptProcessorNode.', e);
+            }
+        }
+        captureNode = audioCtx.createScriptProcessor(4096, 1, 1);
+        captureNode.onaudioprocess = (e) => pushSamples(e.inputBuffer.getChannelData(0));
+        sourceNode.connect(captureNode);
+        captureNode.connect(sinkNode);
+    }
+
+    function teardownAudio() {
+        if (animationId) cancelAnimationFrame(animationId);
+        animationId = null;
+        if (captureNode) {
+            if (captureNode.port) captureNode.port.onmessage = null;
+            else captureNode.onaudioprocess = null;
+            captureNode.disconnect();
+        }
+        if (sourceNode) sourceNode.disconnect();
+        if (sinkNode) sinkNode.disconnect();
+        if (streamRef) streamRef.getTracks().forEach(t => t.stop());
+        // close() (not suspend()) releases the context; browsers cap the number of live contexts.
+        if (audioCtx) audioCtx.close().catch(() => {});
+        audioCtx = streamRef = sourceNode = captureNode = sinkNode = null;
+    }
+
+    function disconnectAudio() {
+        teardownAudio();
+        isRecording = hasRecordedData = isDisplayHeld = false;
+        frameCount = 0;
+        for (const c of Object.values(canvases)) c.ctx.clearRect(0, 0, c.w, c.h);
+        ui.vuValue.textContent = '-∞';
+        forceRedraw();
+        updateUI();
+    }
+
+    async function changeSampleRate() {
+        if (audioCtx) {
+            disconnectAudio();
+            await initAudio();
+        } else {
+            const prevNyquist = sampleRate / 2;
+            sampleRate = parseInt(ui.sampleRate.value, 10);
+            syncMaxFreq(prevNyquist);
+            forceRedraw();
+        }
+    }
+
+    // Keep the max-frequency field at Nyquist if it was there before, and never above it.
+    function syncMaxFreq(prevNyquist) {
+        const nyq = sampleRate / 2;
+        const v = parseFloat(ui.maxFreq.value);
+        if (!(v > 0) || v > nyq || v === prevNyquist) ui.maxFreq.value = nyq;
+    }
+
+    // =====================================================================
+    // Analysis setup
+    // =====================================================================
+    function setupAnalysis() {
+        fftSize = parseInt(ui.fftSize.value, 10);
+        bins = fftSize / 2;
+
+        frameBuf = new Float32Array(fftSize);
+        binFreqs = new Float32Array(bins);
+        for (let k = 0; k < bins; k++) binFreqs[k] = k * sampleRate / fftSize;
+
+        rawPower = new Float64Array(bins);
+        rawDb = new Float32Array(bins).fill(FLOOR_DB);
+        smoothedDb = new Float32Array(bins).fill(FLOOR_DB);
+        heldDb = new Float32Array(bins).fill(FLOOR_DB);
+        sumPower = new Float64Array(bins);
+        averagedDb = new Float32Array(bins).fill(FLOOR_DB);
+        calGain = new Float64Array(bins).fill(1);
+
+        initFFT(fftSize);
+        buildWindow();
+        updateCalibration();
+        updateMetrics();
+
+        // Discard queued samples so the first frame is contiguous.
+        ringRead = ringWrite; ringFill = 0;
+        isDisplayHeld = false;
+        resetAverage();
+    }
+
+    function changeFFTSettings() {
+        if (!audioCtx) return;
+        setupAnalysis();
+        updateUI();
+    }
+
+    function updateMetrics() {
+        if (!audioCtx || !fftSize) {
+            ui.paramFs.textContent = '-- Hz'; ui.paramLen.textContent = '-- ms';
+            ui.paramRes.textContent = '-- Hz'; ui.paramHop.textContent = '-- ms';
+            return;
+        }
+        ui.paramFs.textContent = `${sampleRate} Hz`;
+        ui.paramLen.textContent = `${(fftSize / sampleRate * 1000).toFixed(2)} ms`;
+        ui.paramRes.textContent = `${(sampleRate / fftSize).toFixed(2)} Hz`;
+        ui.paramHop.textContent = `${(getHopSize() / sampleRate * 1000).toFixed(2)} ms`;
+    }
+
+    // Periodic windows (the right choice for spectral analysis).
+    function buildWindow() {
+        const n = fftSize, type = ui.windowType.value;
+        windowArr = new Float32Array(n);
+        windowSum = 0;
+        for (let i = 0; i < n; i++) {
+            const x = 2 * Math.PI * i / n;
+            let w;
+            switch (type) {
+                case 'hann':     w = 0.5 - 0.5 * Math.cos(x); break;
+                case 'hamming':  w = 0.54 - 0.46 * Math.cos(x); break;
+                case 'blackman': w = 0.42 - 0.5 * Math.cos(x) + 0.08 * Math.cos(2 * x); break;
+                case 'flattop':  w = 0.21557895 - 0.41663158 * Math.cos(x) + 0.277263158 * Math.cos(2 * x)
+                                     - 0.083578947 * Math.cos(3 * x) + 0.006947368 * Math.cos(4 * x); break;
+                default:         w = 1;
+            }
+            windowArr[i] = w;
+            windowSum += w;
+        }
+    }
+
+    // =====================================================================
+    // Calibration
+    // =====================================================================
+    function loadCalibration(text, filename) {
+        const pts = parseNumericPairs(text);
+        if (!pts.length) {
+            alert('No valid calibration points found.\nExpected lines of: frequency  dB');
+            return;
+        }
+        calPoints = pts;
+        ui.calLabel.textContent = filename;
+        ui.calLabel.title = `${filename} (${pts.length} points)`;
+        ui.calLabel.classList.add('text-emerald-400');
+        ui.btnClearCal.classList.remove('hidden');
+        updateCalibration();
+    }
+
+    function clearCalibration() {
+        calPoints = [];
+        ui.calLabel.textContent = 'None';
+        ui.calLabel.title = 'No calibration loaded';
+        ui.calLabel.classList.remove('text-emerald-400');
+        ui.btnClearCal.classList.add('hidden');
+        updateCalibration();
+    }
+
+    // Linear interpolation of the cal curve onto FFT bins, as a power gain.
+    function updateCalibration() {
+        if (!calGain) return;
+        if (!calPoints.length) { calGain.fill(1); return; }
+        const sign = ui.calMode.value === 'add' ? 1 : -1;
+        const first = calPoints[0], last = calPoints[calPoints.length - 1];
+        let j = 0;
+        for (let k = 0; k < bins; k++) {
+            const f = binFreqs[k];
+            let d;
+            if (f <= first.f) d = first.d;
+            else if (f >= last.f) d = last.d;
+            else {
+                while (calPoints[j + 1].f < f) j++;
+                const p1 = calPoints[j], p2 = calPoints[j + 1];
+                d = p1.d + (f - p1.f) / (p2.f - p1.f) * (p2.d - p1.d);
+            }
+            calGain[k] = Math.pow(10, sign * d / 10);
+        }
+    }
+
+    // =====================================================================
+    // FFT (iterative radix-2, precomputed twiddles)
+    // =====================================================================
+    function initFFT(n) {
+        fftRe = new Float64Array(n);
+        fftIm = new Float64Array(n);
+        fftRev = new Uint32Array(n);
+        const bits = Math.log2(n);
+        for (let i = 0; i < n; i++) {
+            let y = 0, x = i;
+            for (let b = 0; b < bits; b++) { y = (y << 1) | (x & 1); x >>= 1; }
+            fftRev[i] = y;
+        }
+        twCos = new Float64Array(n / 2);
+        twSin = new Float64Array(n / 2);
+        for (let k = 0; k < n / 2; k++) {
+            twCos[k] = Math.cos(-2 * Math.PI * k / n);
+            twSin[k] = Math.sin(-2 * Math.PI * k / n);
+        }
+    }
+
+    function runFFT() {
+        const n = fftSize, re = fftRe, im = fftIm;
+        for (let size = 2; size <= n; size <<= 1) {
+            const half = size >> 1, step = n / size;
+            for (let i = 0; i < n; i += size) {
+                for (let j = 0, k = 0; j < half; j++, k += step) {
+                    const a = i + j, b = a + half;
+                    const wr = twCos[k], wi = twSin[k];
+                    const tr = wr * re[b] - wi * im[b];
+                    const ti = wr * im[b] + wi * re[b];
+                    re[b] = re[a] - tr; im[b] = im[a] - ti;
+                    re[a] += tr;        im[a] += ti;
+                }
+            }
+        }
+    }
+
+    // Window + FFT the current frameBuf into rawPower / rawDb.
+    // Scaled so a full-scale sine reads 0 dBFS regardless of window.
+    function analyzeFrame() {
+        for (let i = 0; i < fftSize; i++) {
+            const r = fftRev[i];
+            fftRe[r] = frameBuf[i] * windowArr[i];
+            fftIm[r] = 0;
+        }
+        runFFT();
+        const scale = 2 / windowSum;
+        for (let k = 0; k < bins; k++) {
+            const s = k === 0 ? scale / 2 : scale;    // DC is not mirrored, so no ×2
+            const p = (fftRe[k] * fftRe[k] + fftIm[k] * fftIm[k]) * s * s * calGain[k];
+            rawPower[k] = p;
+            rawDb[k] = p > 1e-20 ? 10 * Math.log10(p) : FLOOR_DB;
+        }
+    }
+
+    // =====================================================================
+    // Sample ingest
+    // =====================================================================
+    function pushSamples(input) {
+        if (!ringBuf || !fftSize) return;
+        let pos = 0, n = input.length;
+        while (n > 0) {
+            const chunk = Math.min(n, ringSize - ringWrite);
+            ringBuf.set(input.subarray(pos, pos + chunk), ringWrite);
+            ringWrite = (ringWrite + chunk) % ringSize;
+            pos += chunk; n -= chunk;
+        }
+        ringFill += input.length;
+        if (ringFill > ringSize) {           // overrun: oldest samples were overwritten
+            droppedSamples += ringFill - ringSize;
+            ringFill = ringSize;
+            ringRead = ringWrite;
+        }
+        processRing();
+    }
+
+    function processRing() {
+        const hop = getHopSize();
+        const releaseSec = parseFloat(ui.release.value) / 1000;
+        const coef = releaseSec > 0 ? Math.exp(-(hop / sampleRate) / releaseSec) : 0;
+
+        let frames = 0;
+        while (ringFill >= fftSize && frames < MAX_FRAMES_PER_BLOCK) {
+            const first = Math.min(fftSize, ringSize - ringRead);
+            frameBuf.set(ringBuf.subarray(ringRead, ringRead + first), 0);
+            if (first < fftSize) frameBuf.set(ringBuf.subarray(0, fftSize - first), first);
+
+            analyzeFrame();
+
+            if (isRecording) {
+                for (let k = 0; k < bins; k++) sumPower[k] += rawPower[k];
+                frameCount++;
+            } else {
+                // Instant attack, exponential release (in dB).
+                for (let k = 0; k < bins; k++) {
+                    const v = rawDb[k];
+                    smoothedDb[k] = v >= smoothedDb[k] ? v : smoothedDb[k] * coef + v * (1 - coef);
+                }
+            }
+
+            ringRead = (ringRead + hop) % ringSize;
+            ringFill -= hop;
+            frames++;
+        }
+
+        // Falling behind: skip ahead rather than lag further and further.
+        if (ringFill > ringSize / 2) {
+            const skip = ringFill - fftSize;
+            droppedSamples += skip;
+            ringRead = (ringRead + skip) % ringSize;
+            ringFill = fftSize;
+        }
+    }
+
+    // =====================================================================
+    // Modes: record / hold / reset
+    // =====================================================================
+    function toggleRecord() { isRecording ? stopRecording() : startRecording(); }
+
+    function startRecording() {
+        if (!audioCtx) return;
+        if (viewingSavedIndex !== -1) selectSaved(-1);
+        isDisplayHeld = false;
+        isRecording = true; hasRecordedData = false; frameCount = 0;
+        sumPower.fill(0); averagedDb.fill(FLOOR_DB);
+        updateUI();
+    }
+
+    function stopRecording() {
+        isRecording = false;
+        computeAverage();               // include frames analysed since the last draw
+        hasRecordedData = frameCount > 0;
+        updateUI();
+        forceRedraw();
+    }
+
+    function computeAverage() {
+        if (!averagedDb) return;
+        for (let k = 0; k < bins; k++) {
+            const p = frameCount ? sumPower[k] / frameCount : 0;
+            averagedDb[k] = p > 1e-20 ? 10 * Math.log10(p) : FLOOR_DB;
+        }
+    }
+
+    function resetAverage() {
+        isRecording = hasRecordedData = false;
+        frameCount = 0;
+        if (sumPower) sumPower.fill(0);
+        if (averagedDb) averagedDb.fill(FLOOR_DB);
+    }
+
+    function resetData() { resetAverage(); updateUI(); forceRedraw(); }
+
+    function toggleHold() {
+        if (!audioCtx || isRecording || hasRecordedData) return;
+        isDisplayHeld = !isDisplayHeld;
+        if (isDisplayHeld) heldDb.set(smoothedDb);
+        updateUI();
+        forceRedraw();
+    }
+
+    // =====================================================================
+    // Saved traces
+    // =====================================================================
+    function getActiveTrace() {
+        if (viewingSavedIndex !== -1) return savedTraces[viewingSavedIndex];
+        if (!audioCtx || !binFreqs) return null;
+        if (isRecording || hasRecordedData) return { name: 'Average', freqs: binFreqs, db: averagedDb, color: COLOR_AVG };
+        if (isDisplayHeld) return { name: 'Held', freqs: binFreqs, db: heldDb, color: COLOR_LIVE };
+        return { name: 'Live', freqs: binFreqs, db: smoothedDb, color: COLOR_LIVE };
+    }
+
+    function saveToMemory() {
+        if (viewingSavedIndex !== -1) return;
+        if (isRecording) computeAverage();
+        const t = getActiveTrace();
+        if (!t) return;
+        const kind = (isRecording || hasRecordedData) ? 'Avg' : isDisplayHeld ? 'Held' : 'Live';
+        const name = `#${++saveCounter} ${kind} ${fftSize}@${fmtRate(sampleRate)} ${new Date().toLocaleTimeString()}`;
+        savedTraces.push({
+            name,
+            freqs: t.freqs,                  // never mutated after creation, safe to share
+            db: Float32Array.from(t.db),
+            color: OVERLAY_COLORS[(saveCounter - 1) % OVERLAY_COLORS.length],
+            fixed: false,
+        });
+        ui.overlay.checked = true;           // show the new reference against the live view
+        rebuildSavedSelect();
+        updateUI();
+        forceRedraw();
+    }
+
+    function importTrace(text, filename) {
+        const pts = parseNumericPairs(text).filter(p => p.f > 0);
+        if (pts.length < 2) {
+            alert('No usable data found.\nExpected lines of: frequency, dB');
+            return;
+        }
+        saveCounter++;
+        savedTraces.push({
+            name: `#${saveCounter} ${filename}`,
+            freqs: Float32Array.from(pts, p => p.f),
+            db: Float32Array.from(pts, p => p.d),
+            color: OVERLAY_COLORS[(saveCounter - 1) % OVERLAY_COLORS.length],
+            fixed: true,                     // exported values already include their dB offset
+        });
+        rebuildSavedSelect();
+        selectSaved(savedTraces.length - 1);
+    }
+
+    function deleteSaved() {
+        if (viewingSavedIndex === -1) return;
+        savedTraces.splice(viewingSavedIndex, 1);
+        viewingSavedIndex = -1;
+        rebuildSavedSelect();
+        updateUI();
+        forceRedraw();
+    }
+
+    function rebuildSavedSelect() {
+        ui.savedSelect.length = 1;           // keep "-- Live View --"
+        savedTraces.forEach((t, i) => ui.savedSelect.add(new Option(t.name, i)));
+        ui.savedSelect.value = String(viewingSavedIndex);
+    }
+
+    function selectSaved(index) {
+        viewingSavedIndex = index;
+        ui.savedSelect.value = String(index);
+        updateUI();
+        forceRedraw();
+    }
+
+    // =====================================================================
+    // UI state
+    // =====================================================================
+    function setButton(el, visible, base, variant) {
+        el.className = `${base} ${variant}${visible ? '' : ' hidden'}`;
+    }
+
+    function updateUI() {
+        const connected = !!audioCtx;
+        const BTN = 'text-white px-4 py-2 rounded-md font-medium transition-colors shadow-sm';
+
+        ui.btnConnect.classList.toggle('hidden', connected);
+        ui.btnConnect.disabled = connecting;
+        ui.btnConnect.textContent = connecting ? 'Connecting…' : 'Connect Mic';
+        ui.btnDisconnect.classList.toggle('hidden', !connected);
+
+        setButton(ui.btnRecord, connected, `w-36 flex justify-center items-center gap-2 ${BTN}`,
+            isRecording ? 'bg-red-600 hover:bg-red-500' : 'bg-blue-600 hover:bg-blue-500');
+        ui.recordLabel.textContent = isRecording ? 'Stop Record' : 'Record Avg';
+        ui.recordIcon.className = `w-2.5 h-2.5 bg-white ${isRecording ? 'rounded-sm animate-pulse' : 'rounded-full'}`;
+
+        setButton(ui.btnHold, connected, `w-32 flex justify-center items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed ${BTN}`,
+            isDisplayHeld ? 'bg-amber-600 hover:bg-amber-500' : 'bg-emerald-600 hover:bg-emerald-500');
+        ui.btnHold.disabled = isRecording || hasRecordedData;
+        ui.holdLabel.textContent = isDisplayHeld ? 'Resume' : 'Hold';
+        ui.holdIcon.className = `w-2.5 h-2.5 bg-white ${isDisplayHeld ? 'rounded-full' : 'rounded-sm'}`;
+
+        ui.btnReset.classList.toggle('hidden', !(connected && hasRecordedData && !isRecording));
+
+        const active = getActiveTrace();
+        ui.btnDownload.classList.toggle('hidden', !active);
+        ui.btnSave.disabled = !active || viewingSavedIndex !== -1;
+        ui.btnDeleteSaved.disabled = viewingSavedIndex === -1;
+
+        ui.frameCount.textContent = frameCount;
+        ui.paramDroppedWrap.classList.toggle('hidden', droppedSamples === 0);
+        ui.paramDropped.textContent = droppedSamples;
+        updateMetrics();
+        updateStatus();
+    }
+
+    function updateStatus() {
+        let msg, color;
+        if (connecting) { msg = 'Requesting microphone…'; color = 'text-slate-400'; }
+        else if (viewingSavedIndex !== -1) { msg = `Viewing saved: ${savedTraces[viewingSavedIndex].name}`; color = 'text-purple-400'; }
+        else if (!audioCtx && errorMessage) { msg = errorMessage; color = 'text-red-400'; }
+        else if (!audioCtx) { msg = everConnected ? 'Disconnected' : 'Awaiting microphone access…'; color = 'text-slate-400'; }
+        else if (isRecording) { msg = 'Recording & averaging…'; color = 'text-red-400'; }
+        else if (hasRecordedData) { msg = `Stopped — viewing average of ${frameCount} frames`; color = 'text-blue-400'; }
+        else { msg = (isDisplayHeld ? '[HELD] ' : '') + 'Live monitor'; color = 'text-emerald-400'; }
+        if (statusNote && audioCtx) msg += ` · ${statusNote}`;
+        ui.status.className = `text-xs font-semibold ${color}`;
+        ui.status.textContent = msg;
+    }
+
+    // =====================================================================
+    // Render loop
+    // =====================================================================
+    function drawLoop(ts) {
+        animationId = requestAnimationFrame(drawLoop);
+        const dt = lastFrameTs ? Math.min(0.1, (ts - lastFrameTs) / 1000) : 0;
+        lastFrameTs = ts;
+
+        if (!isDisplayHeld) {
+            drawVUMeter(computeRmsDb(), dt);
+            drawOscilloscope();
+        }
+        if (isRecording) {
+            computeAverage();
+            ui.frameCount.textContent = frameCount;
+        }
+        if (droppedSamples && ui.paramDroppedWrap.classList.contains('hidden')) updateUI();
+        drawFFT();
+    }
+
+    // When the render loop isn't running (disconnected), draw on demand.
+    function forceRedraw() {
+        if (!animationId) drawFFT();
+    }
+
+    function computeRmsDb() {
+        if (!frameBuf) return -VU_RANGE_DB;
+        let sum = 0;
+        for (let i = 0; i < frameBuf.length; i++) sum += frameBuf[i] * frameBuf[i];
+        const db = 10 * Math.log10(sum / frameBuf.length);
+        return isFinite(db) ? Math.max(-VU_RANGE_DB, db) : -VU_RANGE_DB;
+    }
+
+    // dbfs: level in dBFS. The scale labels are shifted by the dB offset.
+    function drawVUMeter(dbfs, dt) {
+        const { ctx, w, h } = canvases.vu;
+        const offset = getOffset();
+        vuPeakDb = Math.max(dbfs, vuPeakDb - VU_PEAK_FALL_DB_PER_S * dt);
+
+        const yOf = (v) => h - (clamp(v, -VU_RANGE_DB, 0) + VU_RANGE_DB) / VU_RANGE_DB * h;
+        const y12 = yOf(-12), y3 = yOf(-3), yLevel = yOf(dbfs);
+
+        ctx.clearRect(0, 0, w, h);
+        const zones = (green, amber, red) => {
+            ctx.fillStyle = green; ctx.fillRect(0, y12, w, h - y12);
+            ctx.fillStyle = amber; ctx.fillRect(0, y3, w, y12 - y3);
+            ctx.fillStyle = red;   ctx.fillRect(0, 0, w, y3);
+        };
+        zones('#064e3b', '#713f12', '#7f1d1d');
+        ctx.save();
+        ctx.beginPath(); ctx.rect(0, yLevel, w, h - yLevel); ctx.clip();
+        zones('#10b981', '#f59e0b', '#ef4444');
+        ctx.restore();
+
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+        ctx.font = '9px Inter, system-ui, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'alphabetic';
+        for (const mark of [0, -6, -12, -20, -30, -40, -60, -80, -100, -120]) {
+            const y = yOf(mark);
+            ctx.fillRect(0, y, w, 1);
+            ctx.fillText(String(+(mark + offset).toFixed(1)), 2, mark === 0 ? y + 9 : y - 2);
+        }
+
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, yOf(vuPeakDb), w, 2);
+
+        ui.vuLabel.textContent = offset ? 'dB' : 'dBFS';
+        ui.vuValue.textContent = dbfs <= -VU_RANGE_DB ? '-∞' : `${(dbfs + offset).toFixed(1)} dB`;
+        ui.vuValue.classList.toggle('text-red-400', dbfs > -3);
+    }
+
+    function drawOscilloscope() {
+        const { ctx, w, h } = canvases.osc;
+        ctx.clearRect(0, 0, w, h);
+        ctx.beginPath(); ctx.strokeStyle = 'rgba(71, 85, 105, 0.5)'; ctx.lineWidth = 1;
+        ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2); ctx.stroke();
+        if (!frameBuf || w < 2) return;
+
+        // Min/max per pixel column so short transients aren't skipped.
+        const n = frameBuf.length, perPx = n / w;
+        ctx.beginPath(); ctx.lineWidth = 1.5; ctx.strokeStyle = '#38bdf8';
+        for (let x = 0; x < w; x++) {
+            const start = Math.floor(x * perPx), end = Math.max(start + 1, Math.floor((x + 1) * perPx));
+            let lo = 1, hi = -1;
+            for (let i = start; i < end && i < n; i++) { const v = frameBuf[i]; if (v < lo) lo = v; if (v > hi) hi = v; }
+            const yHi = h / 2 - hi * h / 2, yLo = h / 2 - lo * h / 2;
+            if (x === 0) ctx.moveTo(x, yHi); else ctx.lineTo(x, yHi);
+            if (yLo !== yHi) ctx.lineTo(x, yLo);
+        }
+        ctx.stroke();
+    }
+
+    // ---------- Spectrum ----------
+    function getView() {
+        const { w, h } = canvases.fft;
+        const nyq = sampleRate / 2;
+        let maxF = parseFloat(ui.maxFreq.value);
+        if (!(maxF > 0)) maxF = nyq;
+        maxF = Math.min(maxF, nyq);
+        let minF = parseFloat(ui.minFreq.value);
+        if (!(minF > 0)) minF = 20;
+        if (minF >= maxF) minF = maxF / 10;
+
+        let minDb = parseFloat(ui.minDb.value), maxDb = parseFloat(ui.maxDb.value);
+        if (!isFinite(minDb)) minDb = -140;
+        if (!isFinite(maxDb)) maxDb = 0;
+        if (minDb > maxDb) [minDb, maxDb] = [maxDb, minDb];
+        if (minDb === maxDb) maxDb = minDb + 1;
+
+        const x0 = Y_AXIS_W, gw = w - Y_AXIS_W, gh = h - X_AXIS_H;
+        const logMin = Math.log10(minF), logSpan = Math.log10(maxF) - logMin;
+        return {
+            w, h, x0, gw, gh, minF, maxF, minDb, maxDb, logMin, logSpan, offset: getOffset(),
+            xOf: (f) => x0 + (Math.log10(f) - logMin) / logSpan * gw,
+            yOf: (db) => clamp(gh - (db - minDb) / (maxDb - minDb) * gh, 0, gh),
+            fOfX: (x) => Math.pow(10, logMin + (x - x0) / gw * logSpan),
+        };
+    }
+
+    const traceValue = (t, i, view) => t.db[i] + (t.fixed ? 0 : view.offset);
+
+    function drawGrid(ctx, view) {
+        const { w, x0, gh, minDb, maxDb, minF, maxF, logSpan } = view;
+        ctx.font = '10px Inter, system-ui, sans-serif';
+        ctx.lineWidth = 1;
+
+        // Horizontal dB lines on round values
+        const step = (maxDb - minDb) > 80 ? 20 : (maxDb - minDb) > 30 ? 10 : 5;
+        ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+        for (let db = Math.floor(maxDb / step) * step; db >= minDb; db -= step) {
+            const y = view.yOf(db);
+            ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(w, y);
+            ctx.strokeStyle = 'rgba(71, 85, 105, 0.25)'; ctx.stroke();
+            ctx.fillStyle = '#94a3b8';
+            ctx.fillText(String(db), x0 - 6, clamp(y, 6, gh - 6));
+        }
+
+        // Vertical frequency lines: 1-2-5 per decade (1…9 when zoomed in)
+        const mults = logSpan < 1.3 ? [1, 2, 3, 4, 5, 6, 7, 8, 9] : [1, 2, 5];
+        ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+        let lastLabelX = -Infinity;
+        for (let d = Math.floor(Math.log10(minF)); d <= Math.ceil(Math.log10(maxF)); d++) {
+            for (const m of mults) {
+                const f = m * Math.pow(10, d);
+                if (f < minF || f > maxF) continue;
+                const x = view.xOf(f);
+                ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, gh);
+                ctx.strokeStyle = m === 1 ? 'rgba(71, 85, 105, 0.45)' : 'rgba(71, 85, 105, 0.2)';
+                ctx.stroke();
+                if (x - lastLabelX >= 28) {
+                    ctx.fillStyle = '#64748b';
+                    ctx.fillText(fmtFreq(f), x, gh + 4);
+                    lastLabelX = x;
+                }
+            }
+        }
+
+        ctx.beginPath(); ctx.moveTo(x0, 0); ctx.lineTo(x0, gh); ctx.lineTo(w, gh);
+        ctx.strokeStyle = '#334155'; ctx.stroke();
+    }
+
+    // Decimate to one point per pixel column, keeping the max so narrow peaks survive.
+    function tracePoints(t, view) {
+        const pts = [];
+        const { freqs } = t;
+        let lastPx = null, maxV = -Infinity;
+        for (let i = 0; i < freqs.length; i++) {
+            const f = freqs[i];
+            if (f < view.minF) continue;
+            if (f > view.maxF) break;
+            const px = Math.round(view.xOf(f));
+            const v = traceValue(t, i, view);
+            if (px !== lastPx) {
+                if (lastPx !== null) pts.push(lastPx, view.yOf(maxV));
+                lastPx = px; maxV = v;
+            } else if (v > maxV) maxV = v;
+        }
+        if (lastPx !== null) pts.push(lastPx, view.yOf(maxV));
+        return pts;
+    }
+
+    function drawTrace(ctx, t, view, isMain) {
+        const pts = tracePoints(t, view);
+        if (pts.length < 2) return;
+        const line = new Path2D();
+        line.moveTo(pts[0], pts[1]);
+        for (let i = 2; i < pts.length; i += 2) line.lineTo(pts[i], pts[i + 1]);
+
+        if (isMain) {
+            const fill = new Path2D();
+            fill.moveTo(pts[0], view.gh);
+            for (let i = 0; i < pts.length; i += 2) fill.lineTo(pts[i], pts[i + 1]);
+            fill.lineTo(pts[pts.length - 2], view.gh);
+            fill.closePath();
+            ctx.fillStyle = `rgba(${t.color}, 0.18)`;
+            ctx.fill(fill);
+        }
+        ctx.strokeStyle = isMain ? `rgb(${t.color})` : `rgba(${t.color}, 0.9)`;
+        ctx.lineWidth = isMain ? 1.5 : 1.25;
+        ctx.stroke(line);
+    }
+
+    function updatePeak(t, view) {
+        let peakVal = -Infinity, peakIdx = -1;
+        for (let i = 0; i < t.freqs.length; i++) {
+            const f = t.freqs[i];
+            if (f < view.minF || f > view.maxF) continue;
+            const v = traceValue(t, i, view);
+            if (v > peakVal) { peakVal = v; peakIdx = i; }
+        }
+        ui.peakFreq.textContent = (peakIdx >= 0 && t.db[peakIdx] > FLOOR_DB + 20)   // ignore silence
+            ? `${t.freqs[peakIdx].toFixed(0)} Hz (${peakVal.toFixed(1)} dB)` : '--';
+    }
+
+    function drawBox(ctx, lines, x, y, anchorRight) {
+        ctx.font = '12px Inter, system-ui, sans-serif';
+        const lh = 16, pad = 8;
+        const bw = Math.max(...lines.map(l => ctx.measureText(l.text).width)) + pad * 2 + 12;
+        const bh = lines.length * lh + pad;
+        const bx = anchorRight ? x - bw : x;
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+        ctx.strokeStyle = '#334155'; ctx.lineWidth = 1;
+        ctx.fillRect(bx, y, bw, bh); ctx.strokeRect(bx, y, bw, bh);
+        ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+        lines.forEach((l, i) => {
+            const ly = y + pad / 2 + lh * i + lh / 2;
+            ctx.fillStyle = `rgb(${l.color})`;
+            ctx.fillRect(bx + pad, ly - 4, 8, 8);
+            ctx.fillStyle = '#f8fafc';
+            ctx.fillText(l.text, bx + pad + 12, ly);
+        });
+        return { bw, bh };
+    }
+
+    function drawCursor(ctx, main, overlays, view) {
+        if (!cursorActive || !main) return;
+        const idx = nearestIndex(main.freqs, cursorFreq);
+        const f = main.freqs[idx];
+        if (f < view.minF || f > view.maxF) return;
+        const v = traceValue(main, idx, view);
+        const cx = view.xOf(f), cy = view.yOf(v);
+
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)'; ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(cx, 0); ctx.lineTo(cx, view.gh);
+        ctx.moveTo(view.x0, cy); ctx.lineTo(view.w, cy);
+        ctx.stroke();
+        ctx.restore();
+
+        ctx.beginPath(); ctx.fillStyle = '#ffffff';
+        ctx.arc(cx, cy, 4, 0, Math.PI * 2); ctx.fill();
+
+        const lines = [{ text: `${f.toFixed(1)} Hz  ${v.toFixed(1)} dB`, color: main.color }];
+        for (const t of overlays) {
+            const tv = traceValue(t, nearestIndex(t.freqs, f), view);
+            const delta = tv - v;
+            lines.push({ text: `${tv.toFixed(1)} dB  (${delta >= 0 ? '+' : ''}${delta.toFixed(1)})  ${t.name}`, color: t.color });
+        }
+        ctx.font = '12px Inter, system-ui, sans-serif';
+        const estW = Math.max(...lines.map(l => ctx.measureText(l.text).width)) + 28;
+        const estH = lines.length * 16 + 8;
+        const right = cx + 12 + estW > view.w;
+        const ty = cy - estH - 8 < 0 ? cy + 12 : cy - estH - 8;
+        drawBox(ctx, lines, right ? cx - 12 : cx + 12, Math.min(ty, view.gh - estH), right);
+    }
+
+    function drawFFT() {
+        const { ctx, w, h } = canvases.fft;
+        ctx.clearRect(0, 0, w, h);
+        if (w <= Y_AXIS_W + 10 || h <= X_AXIS_H + 10) return;
+
+        const view = getView();
+        drawGrid(ctx, view);
+
+        const main = getActiveTrace();
+        const overlays = ui.overlay.checked ? savedTraces.filter(t => t !== main) : [];
+
+        ctx.save();
+        ctx.beginPath(); ctx.rect(view.x0, 0, view.gw, view.gh); ctx.clip();
+        overlays.forEach(t => drawTrace(ctx, t, view, false));
+        if (main) drawTrace(ctx, main, view, true);
+        ctx.restore();
+
+        if (main) updatePeak(main, view); else ui.peakFreq.textContent = '--';
+
+        if (overlays.length && main) {
+            const legend = [main, ...overlays].map(t => ({ text: t.name, color: t.color }));
+            drawBox(ctx, legend, view.x0 + 8, 8, false);
+        }
+        drawCursor(ctx, main, overlays, view);
+    }
+
+    // =====================================================================
+    // Export
+    // =====================================================================
+    function downloadCSV() {
+        if (isRecording) computeAverage();
+        const t = getActiveTrace();
+        if (!t) return;
+        const offset = getOffset();
+        const rows = ['Frequency (Hz),Amplitude (dB)'];
+        for (let i = 0; i < t.freqs.length; i++) {
+            if (t.db[i] <= FLOOR_DB) continue;
+            rows.push(`${t.freqs[i].toFixed(2)},${(t.db[i] + (t.fixed ? 0 : offset)).toFixed(2)}`);
+        }
+        const blob = new Blob([rows.join('\n') + '\n'], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `FFT_${t.name.replace(/[^\w@.-]+/g, '_')}_${new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19)}.csv`;
+        document.body.appendChild(link); link.click(); link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    // =====================================================================
+    // Event wiring
+    // =====================================================================
+    ui.btnConnect.addEventListener('click', initAudio);
+    ui.btnDisconnect.addEventListener('click', disconnectAudio);
+    ui.btnRecord.addEventListener('click', toggleRecord);
+    ui.btnHold.addEventListener('click', toggleHold);
+    ui.btnReset.addEventListener('click', resetData);
+    ui.btnDownload.addEventListener('click', downloadCSV);
+
+    ui.fftSize.addEventListener('change', changeFFTSettings);
+    ui.windowType.addEventListener('change', changeFFTSettings);
+    ui.sampleRate.addEventListener('change', changeSampleRate);
+    ui.overlap.addEventListener('change', updateMetrics);
+    ui.release.addEventListener('input', () => { ui.releaseLabel.textContent = `${ui.release.value} ms`; });
+
+    [ui.minFreq, ui.maxFreq, ui.minDb, ui.maxDb, ui.dbOffset, ui.overlay]
+        .forEach(el => el.addEventListener('input', forceRedraw));
+
+    const readFile = (input, handler) => input.addEventListener('change', () => {
+        const file = input.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => handler(reader.result, file.name);
+        reader.readAsText(file);
+        input.value = '';
+    });
+    ui.btnLoadCal.addEventListener('click', () => ui.calFile.click());
+    readFile(ui.calFile, loadCalibration);
+    ui.btnClearCal.addEventListener('click', clearCalibration);
+    ui.calMode.addEventListener('change', updateCalibration);
+
+    ui.btnSave.addEventListener('click', saveToMemory);
+    ui.savedSelect.addEventListener('change', () => selectSaved(parseInt(ui.savedSelect.value, 10)));
+    ui.btnDeleteSaved.addEventListener('click', deleteSaved);
+    ui.btnImport.addEventListener('click', () => ui.traceFile.click());
+    readFile(ui.traceFile, importTrace);
+
+    // Cursor
+    const fftEl = canvases.fft.el;
+    fftEl.addEventListener('pointermove', (e) => {
+        const x = e.clientX - fftEl.getBoundingClientRect().left;
+        const view = getView();
+        cursorActive = x >= view.x0;
+        if (cursorActive) cursorFreq = view.fOfX(x);
+        forceRedraw();
+    });
+    fftEl.addEventListener('pointerleave', () => { cursorActive = false; forceRedraw(); });
+
+    window.addEventListener('keydown', (e) => {
+        const tag = document.activeElement && document.activeElement.tagName;
+        if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+            const main = getActiveTrace();
+            if (!cursorActive || !main) return;
+            const idx = clamp(nearestIndex(main.freqs, cursorFreq) + (e.key === 'ArrowLeft' ? -1 : 1), 0, main.freqs.length - 1);
+            cursorFreq = main.freqs[idx];
+            forceRedraw();
+            e.preventDefault();
+        } else if (e.key === 'h' || e.key === 'H') {
+            toggleHold();
+        } else if (e.key === 'r' || e.key === 'R') {
+            if (audioCtx) toggleRecord();
+        } else if (e.key === 's' || e.key === 'S') {
+            if (!ui.btnSave.disabled) saveToMemory();
+        }
+    });
+
+    updateUI();
+    </script>
+</body>
+</html>
